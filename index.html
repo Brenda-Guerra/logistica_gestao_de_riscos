@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RiscoGCS</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Sistema de gestão de riscos na cadeia global de suprimentos: registro, matriz de vulnerabilidade, TTR × TTS, Monte Carlo, simulador de interrupção, plano de ações e KRIs.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=JetBrains+Mono:wght@500;600&family=Public+Sans:wght@400;500;600;700&display=swap">
+<!--CSS-->
+<link rel="stylesheet" href="assets/style.css">
+<!--/CSS-->
+</head>
+<body>
+<!--BODY-->
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 34 34" aria-hidden="true">
+        <rect width="34" height="34" rx="8" fill="#223460"/>
+        <path d="M8 24 L17 10 L26 24 Z" fill="none" stroke="#7d9cf0" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="8" cy="24" r="3.2" fill="#ffffff"/><circle cx="17" cy="10" r="3.2" fill="#ffffff"/><circle cx="26" cy="24" r="3.2" fill="#ec835a"/>
+      </svg>
+      <div><b>RiscoGCS</b><span>Gestão de riscos na cadeia</span></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Seções"></nav>
+    <div class="side-foot">Empresa de demonstração<br><b id="companyName">NordEletro S.A.</b><br>Dados fictícios para fins didáticos.</div>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <div><h1 id="pageTitle">Painel executivo</h1><p id="pageSub"></p></div>
+      <div class="mode-bar" id="modeBar"><span>Cenário</span>
+        <div class="seg" role="group" aria-label="Cenário de avaliação">
+          <button data-mode="inerente" aria-pressed="true">Inerente</button>
+          <button data-mode="atual" aria-pressed="false">Residual atual</button>
+          <button data-mode="planejado" aria-pressed="false">Residual planejado</button>
+        </div>
+      </div>
+    </header>
+    <main id="view" aria-live="polite"></main>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<div id="tip" class="tip" hidden></div>
+<div id="toast" role="status"></div>
+<!--/BODY-->
+<!--JS-->
+<script src="assets/js/util.js"></script>
+<script src="assets/js/data.js"></script>
+<script src="assets/js/model.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/app.js"></script>
+<script src="assets/js/views-avaliar.js"></script>
+<script src="assets/js/views-analise.js"></script>
+<script src="assets/js/views-quantificar.js"></script>
+<script src="assets/js/views-tratar.js"></script>
+<script src="assets/js/views-governanca.js"></script>
+<!--/JS-->
+</body>
+</html>
