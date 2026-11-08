@@ -53,12 +53,12 @@ U.storage = {
 };
 
 /* ---------- Modal ---------- */
-U.modal = ({ title, body, wide = false, actions = [], onMount }) => {
+U.modal = ({ title, body, wide = false, xl = false, actions = [], onMount }) => {
   const root = U.$('#modalRoot');
   const wrap = document.createElement('div');
   wrap.className = 'modal-back';
   wrap.innerHTML = `
-    <div class="modal ${wide ? 'modal-wide' : ''}" role="dialog" aria-modal="true" aria-label="${U.esc(title)}">
+    <div class="modal ${wide ? 'modal-wide' : ''} ${xl ? 'modal-xl' : ''}" role="dialog" aria-modal="true" aria-label="${U.esc(title)}">
       <header class="modal-head"><h2>${U.esc(title)}</h2>
         <button class="icon-btn" data-close aria-label="Fechar">✕</button></header>
       <div class="modal-body">${body}</div>
@@ -66,7 +66,7 @@ U.modal = ({ title, body, wide = false, actions = [], onMount }) => {
     </div>`;
   root.appendChild(wrap);
   const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onKey = (e) => { if (e.key === 'Escape' && root.lastElementChild === wrap) close(); };
   document.addEventListener('keydown', onKey);
   wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
   wrap.querySelector('[data-close]').addEventListener('click', close);

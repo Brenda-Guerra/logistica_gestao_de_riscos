@@ -1,61 +1,69 @@
 /* ==========================================================================
-   app.js — navegação, componentes compartilhados e inicialização
+   app.js — navegação por abas (página única), componentes e formulários
    ========================================================================== */
 const App = { mode: 'inerente', views: {}, current: null };
 const V = {}; // componentes de interface reutilizáveis
 
-App.ROUTES = [
-  { group: 'Visão geral', items: [{ id: 'painel', nome: 'Painel executivo', sub: 'Situação da carteira de riscos da cadeia de suprimentos' }] },
-  { group: 'Identificar e avaliar', items: [
-    { id: 'rede', nome: 'Rede da cadeia', sub: 'Onde estão os riscos na rede e qual elo é o mais fraco (TTR × TTS)' },
-    { id: 'riscos', nome: 'Registro de riscos', sub: 'Inventário de riscos com probabilidade, impacto e tratamento' },
-    { id: 'matriz', nome: 'Matriz de vulnerabilidade', sub: 'Probabilidade × consequência para priorizar esforços' },
-    { id: 'analise', nome: 'Nova análise (6 passos)', sub: 'Assistente que conduz o processo de gestão de riscos passo a passo' },
-  ] },
-  { group: 'Quantificar', items: [
-    { id: 'montecarlo', nome: 'Perda anual (Monte Carlo)', sub: 'Distribuição de perdas da carteira e efeito do plano de ações' },
-    { id: 'interrupcao', nome: 'Simulador de interrupção', sub: 'Perfil de desempenho de uma interrupção e o valor de reagir cedo' },
-  ] },
-  { group: 'Tratar', items: [{ id: 'acoes', nome: 'Plano de ações', sub: 'Reduzir probabilidade, reduzir consequência ou transferir' }] },
-  { group: 'Monitorar', items: [
-    { id: 'monitoramento', nome: 'Indicadores e alertas', sub: 'KRIs com limites e sinais fracos captados na rede' },
-    { id: 'fornecedores', nome: 'Fornecedores', sub: 'Pontuação de risco por fornecedor e concentração de compras' },
-  ] },
-  { group: 'Governança', items: [
-    { id: 'principios', nome: 'Dez princípios', sub: 'Autoavaliação de maturidade em gestão de riscos na cadeia' },
-    { id: 'relatorio', nome: 'Relatório e dados', sub: 'Resumo executivo, exportação e backup' },
-    { id: 'metodologia', nome: 'Metodologia', sub: 'Conceitos da disciplina, fórmulas, premissas e referências' },
-  ] },
+App.TABS = [
+  { id: 'painel', nome: 'Painel', sub: 'Situação geral da cadeia. Clique em um elo do mapa para ver riscos, tempos de recuperação, indicadores e fornecedores.' },
+  { id: 'riscos', nome: 'Riscos', sub: 'Clique em uma célula da matriz, em um nível ou em uma categoria para filtrar a lista. Clique em um risco para abrir o detalhe.' },
+  { id: 'acoes', nome: 'Ações', sub: 'Plano de tratamento. Clique numa estratégia ou num status para filtrar; clique numa ação para editar.' },
+  { id: 'monitor', nome: 'Monitoramento', sub: 'Indicadores antecipatórios, sinais captados na rede e risco dos fornecedores.' },
+  { id: 'simular', nome: 'Simulações', sub: 'Quanto a empresa pode perder num ano e o que acontece numa interrupção.' },
 ];
-App.flat = App.ROUTES.flatMap((g) => g.items);
-App.MODE_ROUTES = ['painel', 'riscos', 'matriz'];
+/* Endereços antigos continuam funcionando */
+App.ALIAS = { rede: 'painel', matriz: 'riscos', analise: 'riscos', montecarlo: 'simular', interrupcao: 'simular', fornecedores: 'monitor', monitoramento: 'monitor', principios: 'painel', metodologia: 'painel', relatorio: 'painel' };
 
-App.go = (id) => { if (location.hash !== '#' + id) location.hash = id; else App.render(); };
+/* Vai para uma aba; "prep" ajusta filtros antes de desenhar */
+App.go = (id, prep) => {
+  if (prep) prep();
+  if (location.hash !== '#' + id) location.hash = id; else App.render();
+  window.scrollTo({ top: 0 });
+};
 
 App.render = () => {
-  const id = (location.hash || '').replace('#', '') || 'painel';
-  const route = App.flat.find((r) => r.id === id) || App.flat[0];
-  App.current = route.id;
-  U.$('#pageTitle').textContent = route.nome;
-  U.$('#pageSub').textContent = route.sub;
-  U.$$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === route.id));
-  U.$('#modeBar').hidden = !App.MODE_ROUTES.includes(route.id);
-  U.$$('#modeBar button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.mode === App.mode));
-  document.title = route.nome + ' · RiscoGCS';
+  let id = (location.hash || '').replace('#', '') || 'painel';
+  if (App.ALIAS[id]) {
+    const old = id;
+    id = App.ALIAS[id];
+    if (old === 'fornecedores') App.monTab = 'forn';
+    if (old === 'interrupcao') App.simTab = 'dis';
+    if (old === 'montecarlo') App.simTab = 'mc';
+    history.replaceState(null, '', '#' + id);
+    setTimeout(() => {
+      if (old === 'analise') W.open();
+      if (old === 'relatorio') X.report();
+      if (old === 'metodologia') X.about('met');
+      if (old === 'principios') X.about('pr');
+    }, 0);
+  }
+  const tab = App.TABS.find((t) => t.id === id) || App.TABS[0];
+  App.current = tab.id;
+  U.$('#pageTitle').textContent = tab.nome;
+  U.$('#pageSub').textContent = tab.sub;
+  U.$$('.tabs a').forEach((a) => {
+    const on = a.dataset.tab === tab.id;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
+  document.title = tab.nome + ' · RiscoGCS';
   const el = U.$('#view');
   el.innerHTML = '';
-  try { App.views[route.id](el); } catch (e) { console.error(e); el.innerHTML = `<div class="card"><p>Erro ao montar esta tela: ${U.esc(e.message)}</p></div>`; }
-  const navLink = U.$('.nav a.active');
-  if (navLink && window.innerWidth < 900) navLink.scrollIntoView({ block: 'nearest', inline: 'center' });
+  try { App.views[tab.id](el); } catch (e) { console.error(e); el.innerHTML = `<div class="card"><p>Erro ao montar esta tela: ${U.esc(e.message)}</p></div>`; }
+  const t = U.$('.tabs a.active');
+  if (t && window.innerWidth < 900) t.scrollIntoView({ block: 'nearest', inline: 'center' });
 };
 
 App.refresh = () => { S.save(); App.render(); };
 
-App.buildNav = () => {
-  U.$('#nav').innerHTML = App.ROUTES.map((g) => `
-    <div class="nav-group"><div class="nav-title">${U.esc(g.group)}</div>
-      ${g.items.map((r) => `<a href="#${r.id}" data-route="${r.id}">${U.esc(r.nome)}</a>`).join('')}
-    </div>`).join('');
+/* Abas com contadores (alertas novos e ações atrasadas) */
+App.buildTabs = () => {
+  const badge = (id) => {
+    if (id === 'monitor') { const n = S.state.alerts.filter((a) => a.status === 'Novo').length; return n ? `<span class="badge" data-tip="${n} sinais novos">${n}</span>` : ''; }
+    if (id === 'acoes') { const n = S.state.actions.filter(M.actionLate).length; return n ? `<span class="badge" data-tip="${n} ações atrasadas">${n}</span>` : ''; }
+    return '';
+  };
+  U.$('#tabs').innerHTML = App.TABS.map((t) => `<a href="#${t.id}" data-tab="${t.id}" class="${t.id === App.current ? 'active' : ''}">${U.esc(t.nome)}${badge(t.id)}</a>`).join('');
 };
 
 /* ---------------- Componentes ---------------- */
@@ -260,15 +268,13 @@ V.actionForm = (a, riskId) => {
 /* ---------------- Inicialização ---------------- */
 App.init = () => {
   S.load();
-  App.buildNav();
+  const save0 = S.save;
+  S.save = () => { const ok = save0(); App.buildTabs(); return ok; };
+  App.buildTabs();
   U.initTips();
   U.$('#companyName').textContent = S.state.empresa.nome;
-  U.$('#modeBar').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-mode]');
-    if (!b) return;
-    App.mode = b.dataset.mode;
-    App.render();
-  });
+  U.$('#btnReport').addEventListener('click', () => X.report());
+  U.$('#btnAbout').addEventListener('click', () => X.about());
   document.addEventListener('click', (e) => {
     const r = e.target.closest('[data-open-risk]');
     if (r) { e.preventDefault(); V.openRisk(r.dataset.openRisk); return; }
@@ -276,6 +282,11 @@ App.init = () => {
     if (a) { e.preventDefault(); const act = S.state.actions.find((x) => x.id === a.dataset.editAction); if (act) V.actionForm(act); return; }
     const g = e.target.closest('[data-go]');
     if (g) { e.preventDefault(); App.go(g.dataset.go); }
+  });
+  /* Elementos clicáveis que não são botões respondem a Enter e Espaço */
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if ((e.key === 'Enter' || e.key === ' ') && t.matches && t.matches('[role="button"], tr[tabindex]')) { e.preventDefault(); t.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
   });
   window.addEventListener('hashchange', App.render);
   App.render();
