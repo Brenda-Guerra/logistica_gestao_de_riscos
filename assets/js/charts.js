@@ -129,8 +129,116 @@ C.spark = (vals, o = {}) => {
   if (o.lines) o.lines.forEach((l) => { s += `<line x1="${p}" x2="${w - p}" y1="${Y(l.v)}" y2="${Y(l.v)}" class="spark-ref ${l.cls}"/>`; });
   s += `<path d="${d} L${X(vals.length - 1)} ${h - p} L${X(0)} ${h - p} Z" style="fill:${o.color || 'var(--s1)'};opacity:.12"/>`;
   s += `<path d="${d}" fill="none" style="stroke:${o.color || 'var(--s1)'}" stroke-width="2" stroke-linejoin="round"/>`;
-  s += `<circle cx="${X(vals.length - 1)}" cy="${Y(vals[vals.length - 1])}" r="3.5" style="fill:${o.dot || o.color || 'var(--s1)'}" stroke="var(--surface)" stroke-width="2"/>`;
+  s += `<circle cx="${X(vals.length - 1)}" cy="${Y(vals[vals.length - 1])}" r="3.5" style="fill:${o.dot || o.color || 'var(--s1)'};stroke:var(--surface)" stroke-width="2"/>`;
   return s + '</svg>';
+};
+
+/* ==========================================================================
+   Componentes de painel (padrão de SaaS de gestão de riscos)
+   ========================================================================== */
+C.uid = (() => { let n = 0; return (p) => p + (++n); })();
+
+/* Medidor de utilização (bullet chart): faixas qualitativas, barra do valor e marca do limite.
+   o = { value (fração do limite), max, color, zones: [{to, color}], label, limitTip } */
+C.meter = (o) => {
+  const max = o.max || 1.5, P = (v) => U.clamp(v / max, 0, 1) * 100;
+  let prev = 0;
+  const zones = (o.zones || []).map((z) => { const s = `<span class="meter-zone" style="left:${P(prev)}%;width:${P(Math.min(z.to, max)) - P(prev)}%;--c:${z.color}"></span>`; prev = z.to; return s; }).join('');
+  return `<div class="meter" role="img" aria-label="${U.esc(o.label || '')}">
+    <div class="meter-track">${zones}<span class="meter-fill" style="width:${P(o.value)}%;--c:${o.color}"></span><span class="meter-limit" style="left:${P(1)}%" data-tip="${U.esc(o.limitTip || 'Limite')}"></span></div>
+    <div class="meter-scale">${[0, 0.5, 1, max].map((t) => `<span style="left:${P(t)}%">${t === 1 ? 'Limite' : Math.round(t * 100) + '%'}</span>`).join('')}</div>
+  </div>`;
+};
+
+/* Barras comparativas com marca de referência (ex.: perda por cenário × limite aceitável).
+   rows = [{label, value, text, color, strong, tip}], o = { ref, refTip } */
+C.compare = (rows, o = {}) => {
+  const max = Math.max(1, ...rows.map((r) => r.value), o.ref || 0) * 1.06;
+  const P = (v) => (v / max) * 100;
+  return `<div class="cmp">${rows.map((r) => `<div class="cmp-row ${r.strong ? 'strong' : ''}" ${r.tip ? `data-tip="${U.esc(r.tip)}"` : ''}>
+    <span class="cmp-lab">${U.esc(r.label)}</span>
+    <span class="cmp-track"><span class="cmp-bar" style="width:${P(r.value)}%;--c:${r.color}"></span>${o.ref ? `<i class="cmp-ref" style="left:${P(o.ref)}%" data-tip="${U.esc(o.refTip || '')}"></i>` : ''}</span>
+    <span class="cmp-val">${U.esc(r.text)}</span></div>`).join('')}</div>`;
+};
+
+/* Barras horizontais empilhadas (ex.: perda por categoria dividida por nível).
+   rows = [{labelHtml, segs: [{v, c}], total, text, tip, attrs, cls}] */
+C.stackBars = (rows, o = {}) => {
+  const max = o.max || Math.max(1, ...rows.map((r) => r.total));
+  return `<div class="sbars">${rows.map((r) => `<button type="button" class="sbar ${r.cls || ''}" ${r.attrs || ''} data-tip="${U.esc(r.tip || '')}">
+    <span class="sbar-lab">${r.labelHtml}</span>
+    <span class="sbar-track">${r.segs.filter((s) => s.v > 0).map((s) => `<span style="width:${((s.v / max) * 100).toFixed(2)}%;background:${s.c}"></span>`).join('')}</span>
+    <span class="sbar-val">${U.esc(r.text)}</span></button>`).join('')}</div>`;
+};
+
+/* Colunas empilhadas em HTML (o texto não muda de tamanho quando o cartão estica).
+   cols = [{label, now, tip, segs: [{v, c}]}], o = { max, h, attrs, label } */
+C.stackCols = (cols, o = {}) => {
+  const max = o.max || Math.max(1, ...cols.map((c) => c.segs.reduce((s, x) => s + x.v, 0)));
+  const ticks = C.niceTicks(0, max, 4).filter((t) => t <= max);
+  return `<div class="scols" role="img" aria-label="${U.esc(o.label || '')}" style="--h:${o.h || 160}px">
+    <div class="scols-grid" aria-hidden="true">${ticks.map((t) => `<span style="bottom:${((t / max) * 100).toFixed(2)}%"><em>${t}</em></span>`).join('')}</div>
+    <div class="scols-bars">${cols.map((c) => `<button type="button" class="scol ${c.now ? 'now' : ''}" ${o.attrs || ''} data-tip="${U.esc(c.tip)}">
+      <span class="scol-stack">${c.segs.filter((s) => s.v > 0).map((s) => `<i style="height:${((s.v / max) * 100).toFixed(2)}%;background:${s.c}"></i>`).join('')}</span>
+      <span class="scol-lab">${U.esc(c.label)}</span></button>`).join('')}</div>
+  </div>`;
+};
+
+/* Cascata horizontal (waterfall): do risco sem ações até a meta do plano.
+   rows = [{label, sub, from, to, kind: 'total'|'down'|'up', text, cls}] */
+C.waterfall = (rows) => {
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.from, r.to))) * 1.04;
+  const P = (v) => (v / max) * 100;
+  return `<div class="wf">${rows.map((r) => {
+    const a = Math.min(r.from, r.to), b = Math.max(r.from, r.to);
+    return `<div class="wf-row ${r.kind} ${r.cls || ''}"><span class="wf-lab">${U.esc(r.label)}${r.sub ? `<small>${U.esc(r.sub)}</small>` : ''}</span>
+      <span class="wf-track"><span class="wf-bar" style="left:${P(a).toFixed(2)}%;width:${Math.max(0.5, P(b) - P(a)).toFixed(2)}%"></span></span>
+      <span class="wf-val">${U.esc(r.text)}</span></div>`;
+  }).join('')}</div>`;
+};
+
+/* Escala segmentada com marcador (gravidade 1–25, nota de fornecedor 0–100) */
+C.scale = (value, bands, o = {}) => {
+  const min = o.min ?? 0, max = o.max ?? bands[bands.length - 1].to;
+  const P = (v) => ((U.clamp(v, min, max) - min) / (max - min)) * 100;
+  let prev = min;
+  const segs = bands.map((b) => { const s = `<span style="left:${P(prev)}%;width:${P(b.to) - P(prev)}%;--c:${b.color}" data-tip="${U.esc(b.name + ': ' + b.range)}"></span>`; prev = b.to; return s; }).join('');
+  return `<div class="scale" role="img" aria-label="${U.esc(o.label || '')}"><div class="scale-track">${segs}<i class="scale-mark" style="left:${P(value)}%"></i></div>
+    <div class="scale-lab"><span>${U.esc(String(o.minLabel ?? min))}</span><span>${U.esc(String(o.maxLabel ?? max))}</span></div></div>`;
+};
+C.scaleLegend = (bands, value) => {
+  const cur = bands.find((b) => value <= b.to) || bands[bands.length - 1];
+  return `<ul class="scale-legend">${bands.map((b) => `<li class="${b === cur ? 'on' : ''}" style="--c:${b.color}"><i></i>${U.esc(b.name)}<span>${U.esc(b.range)}</span></li>`).join('')}</ul>`;
+};
+
+/* Faixa de tolerância de um indicador: normal, atenção, crítico e a leitura atual */
+C.zone = (k) => {
+  const v = k.hist[k.hist.length - 1];
+  const lo = Math.min(...k.hist, k.verde, k.vermelho), hi = Math.max(...k.hist, k.verde, k.vermelho);
+  const pad = (hi - lo) * 0.12 || 1, a = lo - pad, b = hi + pad;
+  const P = (x) => ((x - a) / (b - a)) * 100;
+  const g = P(k.verde), r = P(k.vermelho);
+  const segs = k.dir === 'menor'
+    ? [['ok', 0, g], ['warn', g, r], ['crit', r, 100]]
+    : [['crit', 0, r], ['warn', r, g], ['ok', g, 100]];
+  return `<span class="zone" aria-hidden="true">${segs.map(([cls, x0, x1]) => `<span class="z-${cls}" style="left:${x0.toFixed(1)}%;width:${(x1 - x0).toFixed(1)}%"></span>`).join('')}
+    <em style="left:${g.toFixed(1)}%">${U.num(k.verde, k.dec)}</em><em style="left:${r.toFixed(1)}%">${U.num(k.vermelho, k.dec)}</em>
+    <i style="left:${P(v).toFixed(1)}%"></i></span>`;
+};
+
+/* Recuperação × sobrevivência de um elo, em semanas (TTR × TTS) */
+C.ruler = (ttr, tts) => {
+  const top = Math.max(ttr, tts, 1);
+  const step = top <= 8 ? 1 : top <= 16 ? 2 : 4;
+  const max = Math.ceil((top * 1.05) / step) * step;
+  const P = (v) => (v / max) * 100, gap = ttr - tts;
+  const ticks = [];
+  for (let t = 0; t <= max; t += step) ticks.push(t);
+  return `<div class="ruler">
+    <div class="rl-row"><span class="rl-lab">Empresa aguenta sem ele<b>${U.wk(tts)} ${tts === 1 ? 'semana' : 'semanas'}</b></span><span class="rl-track"><i class="rl-bar tts" style="width:${P(tts)}%"></i></span></div>
+    <div class="rl-row"><span class="rl-lab">Elo leva para voltar<b>${U.wk(ttr)} ${ttr === 1 ? 'semana' : 'semanas'}</b></span><span class="rl-track"><i class="rl-bar ttr" style="width:${P(ttr)}%"></i>${gap > 0 ? `<i class="rl-gap" style="left:${P(tts)}%;width:${P(gap)}%" data-tip="${U.num(gap, 1)} semanas sem abastecimento"></i>` : ''}</span></div>
+    <div class="rl-row rl-axis"><span class="rl-lab"></span><span class="rl-ticks">${ticks.map((t) => `<i style="left:${P(t)}%">${t}</i>`).join('')}</span></div>
+  </div>`;
 };
 
 /* Radar (maturidade dos princípios) */
@@ -154,7 +262,7 @@ C.radar = (labels, values, max = 4) => {
   s += `<polygon points="${values.map((v, i) => pt(i, v).join(',')).join(' ')}" style="fill:var(--s1);fill-opacity:.18;stroke:var(--s1)" stroke-width="2"/>`;
   values.forEach((v, i) => {
     const [x, y] = pt(i, v);
-    s += `<circle cx="${x}" cy="${y}" r="4.5" style="fill:var(--s1)" stroke="var(--surface)" stroke-width="2" data-tip="Princípio ${i + 1}: ${DATA.MATURIDADE[v]} (${v}/4)"/>`;
+    s += `<circle cx="${x}" cy="${y}" r="4.5" style="fill:var(--s1);stroke:var(--surface)" stroke-width="2" data-tip="Princípio ${i + 1}: ${DATA.MATURIDADE[v]} (${v}/4)"/>`;
   });
   return s + '</svg>';
 };

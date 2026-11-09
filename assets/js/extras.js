@@ -1,357 +1,13 @@
 /* ==========================================================================
-   extras.js — assistente de 6 passos, relatório e "Sobre" (janelas)
-   ========================================================================== */
-App.wiz = null;
-const W = {};
-
-W.STEPS = [
-  { n: 1, nome: 'Processo ou recurso', dica: 'Escolha o elo da cadeia (processo, fornecedor, rota, unidade ou sistema) que será analisado.' },
-  { n: 2, nome: 'Identificação', dica: 'Levante o risco e classifique sua categoria e natureza.' },
-  { n: 3, nome: 'Probabilidade', dica: 'Estime a chance de ocorrência com dados históricos, mapas e inteligência.' },
-  { n: 4, nome: 'Consequências', dica: 'Pergunte: o que aconteceria se esse risco se materializasse?' },
-  { n: 5, nome: 'Vulnerabilidade', dica: 'Combine probabilidade e consequência para priorizar.' },
-  { n: 6, nome: 'Ações', dica: 'Reduzir probabilidade, reduzir consequência ou transferir.' },
-];
-
-W.fresh = (pre = {}) => ({
-  step: pre.no ? 2 : 1,
-  d: {
-    no: pre.no || '', cat: pre.cat || 'fornecimento', tipo: pre.tipo || 'acidental',
-    titulo: pre.titulo || '', causa: pre.causa || '', consequencia: pre.consequencia || '', resp: '',
-    p: 3, dims: { pessoas: 1, reputacao: 2, operacao: 3 }, sev: [200, 800, 3000], acoes: [], alertId: pre.alertId || null,
-  },
-});
-
-W.draftRisk = () => {
-  const d = App.wiz.d;
-  return { id: 'NOVO', titulo: d.titulo, cat: d.cat, tipo: d.tipo, no: d.no, p: d.p, dims: d.dims, sev: d.sev, status: 'Identificado', causa: d.causa, consequencia: d.consequencia };
-};
-/* Avalia o rascunho incluindo temporariamente as ações planejadas no estado */
-W.evalDraft = (mode) => {
-  const r = W.draftRisk();
-  const tmp = App.wiz.d.acoes.map((a, i) => ({ ...a, id: 'TMP' + i, riscos: ['NOVO'], status: 'Planejada', progresso: 0 }));
-  S.state.actions.push(...tmp);
-  try { return M.evalRisk(r, mode); } finally { S.state.actions.splice(S.state.actions.length - tmp.length, tmp.length); }
-};
-
-/* Abre o assistente numa janela sobre a página. "pre" pré-preenche (elo, título, sinal de origem). */
-W.open = (pre) => {
-  if (pre || !App.wiz) App.wiz = W.fresh(pre || {});
-  W.close = U.modal({ title: 'Nova análise de risco', xl: true, body: '<div id="wizHost"></div>' });
-  W.draw();
-};
-
-W.draw = () => {
-  const el = U.$('#wizHost');
-  if (!el) return;
-  const w = App.wiz, d = w.d;
-  const node = S.node(d.no);
-
-  el.innerHTML = `
-  <ol class="stepper" aria-label="Passos do processo">${W.STEPS.map((s) => `<li class="${s.n === w.step ? 'cur' : s.n < w.step ? 'done' : ''}">
-    <button data-step="${s.n}" ${s.n > w.step && !(s.n === 2 && d.no) ? 'disabled' : ''}><span class="step-n">${s.n}</span><span class="step-t">${s.nome}</span></button></li>`).join('')}</ol>
-  <section class="card wiz">
-    <div class="wiz-head"><div><span class="eyebrow">Passo ${w.step} de 6</span><h3>${W.STEPS[w.step - 1].nome}</h3><p class="muted">${W.STEPS[w.step - 1].dica}</p></div>
-      ${node ? `<div class="wiz-ctx"><span class="muted">Elo</span><b>${U.esc(node.nome)}</b>${d.titulo ? `<span class="muted">Risco</span><b>${U.esc(d.titulo)}</b>` : ''}</div>` : ''}</div>
-    <div id="wizBody">${W['step' + w.step](d)}</div>
-    <p class="form-err" id="wizErr" hidden></p>
-    <div class="wiz-foot">
-      <button class="btn" id="wizReset">Recomeçar</button><span class="spacer"></span>
-      ${w.step > 1 ? '<button class="btn" id="wizBack">Voltar</button>' : ''}
-      ${w.step < 6 ? '<button class="btn btn-primary" id="wizNext">Avançar</button>' : '<button class="btn btn-primary" id="wizSave">Salvar no registro</button>'}
-    </div>
-  </section>`;
-
-  const err = (m) => { const e = U.$('#wizErr', el); e.textContent = m; e.hidden = !m; };
-  const valid = () => {
-    if (w.step === 1 && !d.no) return 'Escolha um elo da cadeia para continuar.';
-    if (w.step === 2 && d.titulo.trim().length < 6) return 'Descreva o risco com um título de pelo menos 6 caracteres.';
-    if (w.step === 4 && !(d.sev[0] <= d.sev[1] && d.sev[1] <= d.sev[2] && d.sev[2] > 0)) return 'As perdas precisam seguir a ordem mínima ≤ mais provável ≤ máxima.';
-    return '';
-  };
-  U.$$('[data-step]', el).forEach((b) => b.addEventListener('click', () => { const t = +b.dataset.step; if (t < w.step || !valid()) { w.step = t; W.draw(); } else err(valid()); }));
-  const next = U.$('#wizNext', el);
-  if (next) next.addEventListener('click', () => { const m = valid(); if (m) return err(m); w.step++; W.draw(); el.closest('.modal-body').scrollTop = 0; });
-  const back = U.$('#wizBack', el);
-  if (back) back.addEventListener('click', () => { w.step--; W.draw(); });
-  U.$('#wizReset', el).addEventListener('click', () => U.confirm('Descartar esta análise e recomeçar?', () => { App.wiz = W.fresh(); W.draw(); }, 'Recomeçar'));
-  const save = U.$('#wizSave', el);
-  if (save) save.addEventListener('click', W.save);
-  W['bind' + w.step] && W['bind' + w.step](el, d);
-};
-
-/* ---- Passo 1: processo ou recurso ---- */
-W.step1 = (d) => `<div class="node-pick">${DATA.CAMADAS.map((c, i) => `<div><h4>${c}</h4>${S.state.nodes.filter((n) => n.camada === i).map((n) => `
-  <button class="pick ${d.no === n.id ? 'on' : ''}" data-pick="${n.id}"><b>${U.esc(n.nome)}</b><small>${U.esc(n.papel)}</small>
-  <small class="muted">${U.plural(M.nodeRisks(n.id).length, 'risco registrado', 'riscos registrados')}${n.ttr != null ? ` · TTR ${U.wk(n.ttr)} / TTS ${U.wk(n.tts)} sem.` : ''}</small></button>`).join('')}</div>`).join('')}</div>
-  <p class="note">Comece pelos elos críticos: fonte única, receita alta dependente ou tempo de recuperação maior que o tempo de sobrevivência.</p>`;
-W.bind1 = (el, d) => U.$$('[data-pick]', el).forEach((b) => b.addEventListener('click', () => { d.no = b.dataset.pick; W.draw(); }));
-
-/* ---- Passo 2: identificação ---- */
-W.step2 = (d) => {
-  const cat = S.cat(d.cat);
-  const exist = M.nodeRisks(d.no);
-  return `<div class="grid-2 gap-l">
-    <div class="form">
-      <label class="span-2">Categoria de risco<select id="wCat">${U.opts(DATA.CATEGORIAS, d.cat)}</select></label>
-      <div class="span-2"><span class="label">Fatores típicos desta categoria (clique para usar como ponto de partida)</span>
-        <div class="chips">${cat.fatores.map((f) => `<button class="chip chip-soft" data-fator="${U.esc(f)}">${U.esc(f)}</button>`).join('')}</div></div>
-      <label class="span-2">Título do risco<input id="wTitulo" value="${U.esc(d.titulo)}" placeholder="Ex.: Incêndio na fábrica do fornecedor de placas"></label>
-      <label class="span-2">Causa (o que pode provocar o evento)<textarea id="wCausa" rows="2">${U.esc(d.causa)}</textarea></label>
-      <label class="span-2">Consequência esperada<textarea id="wCons" rows="2">${U.esc(d.consequencia)}</textarea></label>
-      <label class="span-2">Responsável<input id="wResp" value="${U.esc(d.resp)}" placeholder="Área ou pessoa dona do risco"></label>
-    </div>
-    <div>
-      <span class="label">Natureza do risco</span>
-      <div class="type-pick">${Object.entries(DATA.TIPOS).map(([k, t]) => `<button class="pick ${d.tipo === k ? 'on' : ''}" data-tipo="${k}"><b>${t.nome}</b><small>${U.esc(t.desc)}</small><small class="muted">Ex.: ${U.esc(t.exemplos)}</small></button>`).join('')}</div>
-      <div class="callout"><b>Evite dois extremos</b><p>Listar riscos demais, sem prioridade, ou olhar apenas os óbvios e deixar vulnerabilidades importantes de fora.</p>
-      ${exist.length ? `<b>Já registrados neste elo</b><ul class="plain small">${exist.map((r) => `<li>${r.id} · ${U.esc(r.titulo)}</li>`).join('')}</ul>` : ''}</div>
-    </div></div>`;
-};
-W.bind2 = (el, d) => {
-  U.$('#wCat', el).addEventListener('change', (e) => { d.cat = e.target.value; W.draw(); });
-  U.$('#wTitulo', el).addEventListener('input', (e) => { d.titulo = e.target.value; });
-  U.$('#wCausa', el).addEventListener('input', (e) => { d.causa = e.target.value; });
-  U.$('#wCons', el).addEventListener('input', (e) => { d.consequencia = e.target.value; });
-  U.$('#wResp', el).addEventListener('input', (e) => { d.resp = e.target.value; });
-  U.$$('[data-fator]', el).forEach((b) => b.addEventListener('click', () => { if (!d.titulo) d.titulo = b.dataset.fator + ' — ' + V.nodeName(d.no); W.draw(); }));
-  U.$$('[data-tipo]', el).forEach((b) => b.addEventListener('click', () => { d.tipo = b.dataset.tipo; W.draw(); }));
-};
-
-/* ---- Passo 3: probabilidade ---- */
-W.step3 = (d) => {
-  const t = DATA.TIPOS[d.tipo];
-  return `<div class="grid-2 gap-l">
-    <div><span class="label">Nível de probabilidade</span>
-      <div class="scale-pick">${DATA.PROB.slice().reverse().map((p) => `<button class="pick row ${d.p === p.n ? 'on' : ''}" data-p="${p.n}"><span class="big">${p.n}</span><span><b>${p.nome}</b><small>${p.faixa} · ${p.exemplo}</small></span></button>`).join('')}</div>
-    </div>
-    <div>
-      <div class="callout"><b>Como estimar um risco ${t.nome.toLowerCase()}</b><p>${U.esc(t.estimar)}</p>
-        <p class="small muted">Fontes possíveis: dados históricos, mapas de ocorrência, informações climáticas, registros setoriais, inteligência de mercado e conhecimento acumulado dos envolvidos.</p></div>
-      <div class="calc"><b>Calculadora de frequência histórica</b>
-        <div class="form form-3">
-          <label>Ocorrências observadas<input type="number" id="cK" min="0" value="1"></label>
-          <label>Em quantos anos<input type="number" id="cN" min="1" value="10"></label>
-          <div class="calc-out" id="cOut"></div>
-        </div>
-        <p class="small muted">Taxa λ = (ocorrências + 0,5) ÷ anos; probabilidade de ao menos um evento no ano = 1 − e<sup>−λ</sup>. O 0,5 evita estimar zero quando nada aconteceu no período.</p>
-      </div>
-    </div></div>`;
-};
-W.bind3 = (el, d) => {
-  U.$$('[data-p]', el).forEach((b) => b.addEventListener('click', () => { d.p = +b.dataset.p; W.draw(); }));
-  const calc = () => {
-    const k = Math.max(0, +U.$('#cK', el).value || 0), n = Math.max(1, +U.$('#cN', el).value || 1);
-    const p = 1 - Math.exp(-(k + 0.5) / n), lv = M.pLevel(p);
-    U.$('#cOut', el).innerHTML = `<span>${U.pct(p, 1)} ao ano → nível <b>${lv} · ${DATA.PROB[lv - 1].nome}</b></span><button class="btn btn-small" id="cApply" data-lv="${lv}">Usar nível ${lv}</button>`;
-    U.$('#cApply', el).addEventListener('click', () => { d.p = lv; W.draw(); });
-  };
-  U.$('#cK', el).addEventListener('input', calc); U.$('#cN', el).addEventListener('input', calc); calc();
-};
-
-/* ---- Passo 4: consequências ---- */
-W.QUESTIONS = [
-  'E se a fábrica de um fornecedor parasse por duas semanas?',
-  'E se uma rota logística crítica fosse bloqueada?',
-  'E se um embarque completo fosse roubado durante o lançamento?',
-  'E se o sistema de informação ficasse fora do ar?',
-  'E se um fornecedor-chave atrasasse um componente crítico?',
-];
-W.step4 = (d) => {
-  const n = S.node(d.no);
-  return `<div class="questions">${W.QUESTIONS.map((q) => `<span>${q}</span>`).join('')}</div>
-  <div class="grid-2 gap-l">
-    <div>
-      ${['pessoas', 'reputacao', 'operacao'].map((k) => `<div class="dim-pick"><span class="label">${DATA.IMPACT[k].nome}</span><div class="dim-opts">
-        ${DATA.IMPACT[k].niveis.map((t, i) => `<button class="pick mini ${d.dims[k] === i + 1 ? 'on' : ''}" data-dim="${k}" data-v="${i + 1}" data-tip="${U.esc(t)}"><b>${i + 1}</b><small>${U.esc(t)}</small></button>`).join('')}</div></div>`).join('')}
-    </div>
-    <div>
-      <span class="label">Perda financeira por ocorrência (R$ mil)</span>
-      <div class="form form-3">
-        <label>Mínima<input type="number" min="0" step="10" data-sev="0" value="${d.sev[0]}"></label>
-        <label>Mais provável<input type="number" min="0" step="10" data-sev="1" value="${d.sev[1]}"></label>
-        <label>Máxima<input type="number" min="0" step="10" data-sev="2" value="${d.sev[2]}"></label>
-      </div>
-      ${n && n.ttr != null ? `<div class="calc"><b>Estimativa pela rede</b><p class="small">${U.esc(n.nome)} sustenta ${U.money(n.receita)} de receita por semana. Com TTR de ${U.wk(n.ttr)} e TTS de ${U.wk(n.tts)} semanas, a margem perdida numa parada completa seria de cerca de ${U.money(M.nodePI(n))}.</p>
-        <button class="btn btn-small" id="useNet">Usar como perda mais provável</button></div>` : ''}
-      <div class="calc" id="impOut"></div>
-      <p class="note">Considere perda de vendas, parada de produção, atraso de lançamento, perda de cliente, dano à marca e custo de recuperação.</p>
-    </div></div>`;
-};
-W.bind4 = (el, d) => {
-  const out = () => {
-    const fl = M.finLevel(d.sev[1]);
-    const i = Math.max(d.dims.pessoas, d.dims.reputacao, d.dims.operacao, fl);
-    U.$('#impOut', el).innerHTML = `<b>Impacto resultante: ${i} · ${DATA.IMPACT_NAMES[i - 1]}</b><p class="small">Financeiro nível ${fl} (${DATA.IMPACT.financeiro.niveis[fl - 1]}). O impacto do risco é a pior das quatro dimensões.</p>`;
-  };
-  U.$$('[data-dim]', el).forEach((b) => b.addEventListener('click', () => { d.dims[b.dataset.dim] = +b.dataset.v; W.draw(); }));
-  U.$$('[data-sev]', el).forEach((inp) => inp.addEventListener('input', () => { d.sev[+inp.dataset.sev] = Math.max(0, +inp.value || 0); out(); }));
-  const un = U.$('#useNet', el);
-  if (un) un.addEventListener('click', () => {
-    const v = Math.round(M.nodePI(S.node(d.no)));
-    if (v > 0) { d.sev = [Math.round(v * 0.3), v, Math.round(v * 3)]; W.draw(); } else U.toast('Este elo tem TTS maior que TTR: a perda pela rede seria zero.');
-  });
-  out();
-};
-
-/* ---- Passo 5: vulnerabilidade ---- */
-W.step5 = (d) => {
-  const e = W.evalDraft('inerente');
-  const pf = M.portfolio('inerente').list;
-  const rank = pf.filter((x) => x.e.score > e.score || (x.e.score === e.score && x.e.pea > e.pea)).length + 1;
-  return `<div class="grid-2 gap-l">
-    <div>${V.heatmap('inerente', { compact: true, highlight: { p: e.pl, i: e.i } })}</div>
-    <div>
-      <div class="stat-row stat-big">
-        <div><span class="muted">P × I</span><b>${e.pl} × ${e.i} = ${e.score}</b></div>
-        <div><span class="muted">Nível</span><b>${V.levelPill(e.level)}</b></div>
-        <div><span class="muted">Perda esperada</span><b>${U.money(e.pea)}/ano</b></div>
-      </div>
-      <div class="callout"><b>${e.quad.nome}</b><p>${U.esc(e.quad.foco)}</p><b>Resposta para nível ${e.level.nome.toLowerCase()}</b><p>${U.esc(e.level.resp)}</p></div>
-      <p>Na carteira atual este risco ficaria em <b>${rank}º lugar</b> entre ${pf.length + 1} riscos.</p>
-      <p class="note">Perda esperada anual = λ × perda média por ocorrência, com λ = −ln(1 − p) e p = ${U.pct(e.p, 1)} ao ano. Perda média da distribuição triangular = (mín + provável + máx) ÷ 3 = ${U.money(e.eLoss)}.</p>
-    </div></div>`;
-};
-
-/* ---- Passo 6: ações ---- */
-W.step6 = (d) => {
-  const e0 = W.evalDraft('inerente'), e1 = W.evalDraft('planejado');
-  const rec = e0.quad.id === 'alta' ? ['prob', 'cons'] : e0.quad.id === 'moderada' ? ['prob'] : e0.quad.id === 'media' ? ['cons', 'transf'] : ['prob'];
-  return `<div class="grid-3 strat">${Object.entries(DATA.ESTRATEGIAS).map(([k, v]) => `<div class="strat-box ${rec.includes(k) ? 'rec' : ''}">
-    <b>${v}</b>${rec.includes(k) ? '<span class="pill st-ok"><i></i>Recomendado</span>' : ''}<small>${DATA.ALAVANCAS[k].join(' · ')}</small></div>`).join('')}</div>
-  <div class="table-wrap"><table class="table"><thead><tr><th>Ação</th><th>Estratégia</th><th>Efeito</th><th class="num">Custo/ano</th><th></th></tr></thead><tbody>
-    ${d.acoes.map((a, i) => `<tr><td>${U.esc(a.titulo)}<small>${U.esc(a.alavanca)}${a.prazo ? ' · prazo ' + U.dateBR(a.prazo) : ''}</small></td><td>${DATA.ESTRATEGIAS[a.estrategia]}</td><td>${V.effect(a)}</td><td class="num">${U.money(a.custo)}</td><td><button class="link" data-del="${i}">Remover</button></td></tr>`).join('') || `<tr><td colspan="5">${V.empty('Nenhuma ação ainda. Adicione abaixo ou salve o risco para tratar depois.')}</td></tr>`}
-  </tbody></table></div>
-  <form id="wAct" class="form form-4 add-row">
-    <label class="span-2">Nova ação<input name="titulo" placeholder="Ex.: Qualificar segundo fornecedor"></label>
-    <label>Estratégia<select name="estrategia" id="wEs">${Object.entries(DATA.ESTRATEGIAS).map(([k, v]) => `<option value="${k}" ${k === rec[0] ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-    <label>Alavanca<select name="alavanca" id="wAl"></select></label>
-    <label>Efeito (%)<input type="number" name="ef" min="5" max="95" step="5" value="30"></label>
-    <label>Franquia (R$ mil, se seguro)<input type="number" name="franquia" min="0" step="10" value="0"></label>
-    <label>Custo anual (R$ mil)<input type="number" name="custo" min="0" step="10" value="100"></label>
-    <label>Prazo<input type="date" name="prazo"></label>
-    <button class="btn" type="submit">Adicionar ação</button>
-  </form>
-  <div class="stat-row stat-big">
-    <div><span class="muted">Inerente</span><b>${V.levelPill(e0.level)} ${U.money(e0.pea)}/ano</b></div>
-    <div><span class="muted">Residual com estas ações</span><b>${V.levelPill(e1.level)} ${U.money(e1.pea)}/ano</b></div>
-    <div><span class="muted">Benefício − custo</span><b>${U.money(e0.pea - e1.pea - d.acoes.reduce((s, a) => s + a.custo, 0))}/ano</b></div>
-  </div>`;
-};
-W.bind6 = (el, d) => {
-  const es = U.$('#wEs', el), al = U.$('#wAl', el);
-  const fill = () => { al.innerHTML = DATA.ALAVANCAS[es.value].map((v) => `<option>${v}</option>`).join(''); };
-  es.addEventListener('change', fill); fill();
-  U.$('#wAct', el).addEventListener('submit', (e) => {
-    e.preventDefault();
-    const f = U.formData(e.target);
-    if (!f.titulo.trim()) { U.toast('Descreva a ação antes de adicionar'); return; }
-    const ef = U.clamp(f.ef || 0, 0, 95) / 100;
-    d.acoes.push({ titulo: f.titulo.trim(), estrategia: f.estrategia, alavanca: f.alavanca, redP: f.estrategia === 'prob' ? ef : 0, redC: f.estrategia === 'cons' ? ef : 0, cobertura: f.estrategia === 'transf' ? ef : 0, franquia: f.franquia || 0, custo: f.custo || 0, prazo: f.prazo, resp: d.resp });
-    W.draw();
-  });
-  U.$$('[data-del]', el).forEach((b) => b.addEventListener('click', () => { d.acoes.splice(+b.dataset.del, 1); W.draw(); }));
-};
-
-W.save = () => {
-  const d = App.wiz.d;
-  const id = S.nextId(S.state.risks, 'R');
-  const r = { ...W.draftRisk(), id, titulo: d.titulo.trim(), resp: d.resp, status: d.acoes.length ? 'Em tratamento' : 'Identificado', data: U.today(), kri: null };
-  S.state.risks.push(r);
-  d.acoes.forEach((a) => {
-    S.state.actions.push({ ...a, id: S.nextId(S.state.actions, 'A'), riscos: [id], status: 'Planejada', progresso: 0, resp: a.resp || d.resp });
-  });
-  if (d.alertId) { const al = S.state.alerts.find((x) => x.id === d.alertId); if (al) { al.status = 'Convertido'; al.risco = id; } }
-  App.wiz = null;
-  if (W.close) W.close();
-  U.toast('Risco ' + id + ' salvo no registro');
-  App.go('riscos', () => { Object.assign(App.reg, App.REG0); App.mode = 'inerente'; });
-  S.save();
-  setTimeout(() => V.openRisk(id), 60);
-};
-
-/* ==========================================================================
-   Relatório e dados (janela)
+   extras.js — janela "Como funciona": guia passo a passo, método, glossário
+   e autoavaliação dos dez princípios
    ========================================================================== */
 const X = {};
-
-X.reportHtml = () => {
-  const st = S.state, emp = st.empresa;
-  const I = M.portfolio('inerente'), A = M.portfolio('atual'), P = M.portfolio('planejado');
-  const cnt = (pf, id) => pf.list.filter((x) => x.e.level.id === id).length;
-  const top = I.list.slice().sort((a, b) => b.e.score - a.e.score || b.e.pea - a.e.pea).slice(0, 10);
-  const nodes = st.nodes.filter((n) => n.ttr != null && n.ttr > n.tts).sort((a, b) => M.nodePI(b) - M.nodePI(a));
-  const kc = st.kris.filter((k) => M.kriStatus(k) === 'crit');
-  const late = st.actions.filter(M.actionLate);
-  const custo = st.actions.reduce((s, a) => s + a.custo, 0);
-  const mat = st.principios.reduce((s, p) => s + p.nota, 0) / 40;
-  const byCat = DATA.CATEGORIAS.map((c) => ({ c, v: I.list.filter((x) => x.r.cat === c.id).reduce((s, x) => s + x.e.pea, 0) })).sort((a, b) => b.v - a.v);
-  return `<article class="report">
-    <header class="report-head"><span class="eyebrow">Relatório de riscos da cadeia de suprimentos</span><h2>${U.esc(emp.nome)}</h2>
-      <p class="muted">${U.esc(emp.setor)} · ${U.esc(emp.sede)} · emitido em ${U.dateBR(U.today())}</p></header>
-    <h3>1. Resumo executivo</h3>
-    <p>A carteira tem <b>${I.list.length} riscos ativos</b> em ${new Set(I.list.map((x) => x.r.no)).size} elos da cadeia. Sem nenhuma ação, ${cnt(I, 'critico')} seriam críticos e ${cnt(I, 'alto')} altos, com perda esperada de <b>${U.money(I.pea)} por ano</b> (${U.pct(I.pea / emp.receitaAnual, 1)} da receita). Com as ações já executadas a perda esperada cai para <b>${U.money(A.pea)}</b>; com o plano completo, para <b>${U.money(P.pea)}</b>, uma redução de ${U.pct((I.pea - P.pea) / I.pea)} a um custo de ${U.money(custo)} por ano.</p>
-    <p>As categorias com maior exposição são ${byCat.slice(0, 3).map((x) => `${x.c.nome.toLowerCase()} (${U.money(x.v)})`).join(', ')}. ${nodes.length ? `O elo mais fraco é <b>${U.esc(nodes[0].nome)}</b>: recupera em ${U.wk(nodes[0].ttr)} semanas, mas a empresa só sobrevive ${U.wk(nodes[0].tts)} semanas sem ele, o que expõe ${U.money(M.nodePI(nodes[0]))} de margem.` : ''} ${kc.length ? `${kc.length} indicadores estão no limite crítico, com destaque para ${kc.slice(0, 2).map((k) => U.esc(k.nome)).join(' e ')}.` : ''} ${late.length ? `${late.length} ações estão atrasadas.` : ''} O índice de maturidade nos dez princípios é ${U.pct(mat)}.</p>
-    <h3>2. Riscos prioritários (inerente)</h3>
-    <div class="table-wrap"><table class="table"><thead><tr><th>ID</th><th>Risco</th><th>Elo</th><th>P×I</th><th class="num">Perda esperada</th><th>Residual planejado</th><th>Responsável</th></tr></thead><tbody>
-      ${top.map(({ r, e }) => { const p = M.evalRisk(r, 'planejado'); return `<tr><td class="mono">${r.id}</td><td>${U.esc(r.titulo)}</td><td>${U.esc(V.nodeName(r.no))}</td><td>${V.scoreCell(e)}</td><td class="num">${U.money(e.pea)}</td><td>${V.levelPill(p.level)} ${U.money(p.pea)}</td><td>${U.esc(r.resp)}</td></tr>`; }).join('')}
-    </tbody></table></div>
-    <h3>3. Elos vulneráveis (TTR maior que TTS)</h3>
-    <div class="table-wrap"><table class="table"><thead><tr><th>Elo</th><th class="num">TTR (sem.)</th><th class="num">TTS (sem.)</th><th class="num">Lacuna</th><th class="num">Margem exposta</th></tr></thead><tbody>
-      ${nodes.map((n) => `<tr><td>${U.esc(n.nome)}</td><td class="num">${U.wk(n.ttr)}</td><td class="num">${U.wk(n.tts)}</td><td class="num">${U.num(n.ttr - n.tts, 1)}</td><td class="num">${U.money(M.nodePI(n))}</td></tr>`).join('')}
-    </tbody></table></div>
-    <h3>4. Situação do plano de ações</h3>
-    <p>${st.actions.length} ações: ${st.actions.filter((a) => a.status === 'Concluída').length} concluídas, ${st.actions.filter((a) => a.status === 'Em andamento').length} em andamento e ${st.actions.filter((a) => a.status === 'Planejada').length} planejadas. ${late.length ? 'Atrasadas: ' + late.map((a) => `${a.id} (${U.esc(a.titulo)})`).join('; ') + '.' : 'Nenhuma ação atrasada.'}</p>
-    <h3>5. Indicadores fora do limite</h3>
-    <ul class="plain bullets">${st.kris.filter((k) => M.kriStatus(k) !== 'ok').map((k) => `<li>${V.statusPill(M.kriStatus(k))} <b>${U.esc(k.nome)}</b>: ${U.num(k.hist[11], k.dec)} ${U.esc(k.unidade)} em ${DATA.MESES[11]}</li>`).join('')}</ul>
-  </article>`;
-};
-
-X.report = () => {
-  const close = U.modal({
-    title: 'Relatório e dados', wide: true,
-    body: `<div class="toolbar report-tools">
-        <button class="btn" id="exRisk">Riscos (CSV)</button>
-        <button class="btn" id="exJson">Backup (JSON)</button>
-        <label class="btn file-btn">Importar backup<input type="file" id="imJson" accept=".json,application/json"></label>
-        <button class="btn btn-quiet" id="reset">Restaurar demonstração</button>
-        ${U.framed ? '' : '<button class="btn btn-primary" id="print">Imprimir</button>'}
-      </div>
-      <p class="muted small report-tools">Os dados ficam salvos neste navegador. Use o backup em JSON para levar a base para outro computador ou compartilhar com o grupo.</p>
-      ${X.reportHtml()}`,
-    onMount: (w) => {
-      U.$('#exRisk', w).addEventListener('click', App.exportRisksCsv);
-      U.$('#exJson', w).addEventListener('click', () => U.download('riscogcs-backup.json', JSON.stringify(S.state, null, 2), 'application/json'));
-      U.$('#imJson', w).addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const rd = new FileReader();
-        rd.onload = () => {
-          try {
-            const d = JSON.parse(rd.result);
-            if (!d || !Array.isArray(d.risks) || !Array.isArray(d.nodes) || d.versao !== 4) throw new Error('formato');
-            S.state = d; close(); App.refresh(); U.toast('Backup importado: ' + d.risks.length + ' riscos');
-          } catch (err) { U.toast('Arquivo inválido: use um backup gerado por este sistema'); }
-        };
-        rd.readAsText(file);
-      });
-      U.$('#reset', w).addEventListener('click', () => U.confirm('Substituir todos os dados pelos dados de demonstração? Alterações feitas serão perdidas.', () => {
-        S.reset(); App.wiz = null; close(); App.render(); U.toast('Dados de demonstração restaurados');
-      }, 'Restaurar'));
-      const pb = U.$('#print', w);
-      if (pb) pb.addEventListener('click', () => {
-        document.body.classList.add('printing');
-        window.addEventListener('afterprint', () => document.body.classList.remove('printing'), { once: true });
-        window.print();
-      });
-    },
-  });
-};
 
 /* ==========================================================================
    Sobre: metodologia e autoavaliação dos dez princípios (janela)
    ========================================================================== */
-X.aboutTab = 'met';
+X.aboutTab = 'guia';
 
 /* Evidências calculadas a partir dos dados do sistema para cada princípio */
 X.autoEvid = () => {
@@ -384,16 +40,16 @@ X.principiosHtml = () => {
   const weakest = pr.map((p, i) => ({ p, i })).sort((a, b) => a.p.nota - b.p.nota).slice(0, 3);
   return `<div class="grid-2 grid-wide-right gap-l">
     <div>
-      <div class="maturity"><span class="kpi-value">${U.pct(tot / (pr.length * 4))}</span><span class="muted">maturidade · ${tot} de ${pr.length * 4} pontos</span></div>
+      <div class="maturity"><span class="kpi-value">${U.pct(tot / (pr.length * 4))}</span><span class="muted">de maturidade · ${tot} de ${pr.length * 4} pontos</span></div>
       ${C.radar(pr.map((_, i) => 'P' + (i + 1)), pr.map((p) => p.nota))}
-      <h4>Prioridades de melhoria</h4>
+      <h4>Onde melhorar primeiro</h4>
       <ol class="plain bullets">${weakest.map(({ p, i }) => `<li><b>P${i + 1}.</b> ${U.esc(DATA.PRINCIPIOS[i])} <span class="muted">(${DATA.MATURIDADE[p.nota]})</span></li>`).join('')}</ol>
     </div>
     <div class="principles">${pr.map((p, i) => `<div class="principle">
       <div class="pr-head"><span class="pr-n">${i + 1}</span><b>${U.esc(DATA.PRINCIPIOS[i])}</b></div>
       <div class="seg seg-5" role="group" aria-label="Nota do princípio ${i + 1}">${DATA.MATURIDADE.map((m, v) => `<button type="button" data-pr="${i}" data-v="${v}" aria-pressed="${p.nota === v}" data-tip="${m}">${v}</button>`).join('')}<span class="seg-lab">${DATA.MATURIDADE[p.nota]}</span></div>
-      <p class="auto"><span class="label">Dado do sistema</span> ${U.esc(auto[i])}</p>
-      <textarea data-ev="${i}" rows="2" aria-label="Evidência do princípio ${i + 1}">${U.esc(p.evidencia)}</textarea>
+      <p class="auto"><span class="label">O que os dados mostram</span> ${U.esc(auto[i])}</p>
+      <textarea data-ev="${i}" rows="2" aria-label="Evidência do princípio ${i + 1}" placeholder="Registre a evidência que justifica a nota">${U.esc(p.evidencia)}</textarea>
     </div>`).join('')}</div>
   </div>`;
 };
@@ -405,29 +61,30 @@ X.metodologiaHtml = () => `
       <p>Cadeias globais de suprimentos ficam expostas a eventos em qualquer elo: um incêndio num fornecedor de nível 2, uma greve no porto ou um ataque ao sistema de pedidos. A empresa fictícia NordEletro, fabricante de eletrodomésticos em Suape (PE), depende de placas eletrônicas e compressores da Ásia, aço e motores do Sul e Sudeste e de uma única fábrica. O módulo responde: quais riscos importam mais, onde está o elo mais fraco, quanto a empresa pode perder num ano e quais ações dão mais retorno.</p>
       <h3>Como usar</h3>
       <ol class="plain bullets">
-        <li><b>Painel:</b> clique nos indicadores do topo para ir direto ao assunto; clique num elo do mapa para ver riscos, indicadores e fornecedores dele.</li>
-        <li><b>Riscos:</b> clique em células da matriz, níveis e categorias para filtrar; “Nova análise” conduz os 6 passos do processo.</li>
-        <li><b>Ações:</b> clique numa estratégia ou status para filtrar; clique numa ação para editar o progresso.</li>
-        <li><b>Monitoramento:</b> atualize a leitura dos indicadores e transforme sinais em riscos.</li>
-        <li><b>Simulações:</b> Monte Carlo da perda anual e simulador de interrupção (resposta ágil × tardia).</li>
+        <li><b>Visão geral:</b> o painel executivo — indicadores-resumo, apetite a risco, matriz, tendência dos indicadores, exposição e mapa da cadeia. Clique em qualquer número, gráfico ou elo para ir direto ao assunto.</li>
+        <li><b>Riscos:</b> filtre pela matriz, pelo nível ou pela categoria; “Novo risco” abre o cadastro.</li>
+        <li><b>Plano de ações:</b> veja quanto o plano reduz, filtre por estratégia ou status e atualize o andamento de cada ação.</li>
+        <li><b>Monitoramento:</b> registre a leitura dos indicadores, analise os sinais da rede e acompanhe a nota dos fornecedores.</li>
+        <li><b>Simulações:</b> sorteie milhares de anos para ver a chance de um ano ruim e teste o que acontece se um elo parar.</li>
       </ol>
+      <p>Em cada cartão, o ícone de informação ao lado do título explica como ler o gráfico. No cabeçalho de cada página, “Como usar esta página” resume os primeiros passos.</p>
       <h3>Premissas e limites</h3>
       <ul class="plain bullets">
         <li>Todos os dados são fictícios e servem para demonstração.</li>
-        <li>Os riscos são independentes no Monte Carlo; na prática, um evento grande pode disparar outros.</li>
-        <li>O impacto é ordinal (1 a 5); reduzir a consequência em X% é uma aproximação para mover o risco na matriz.</li>
+        <li>Na simulação de perdas, os riscos são independentes; na prática, um evento grande pode disparar outros.</li>
+        <li>O impacto é uma nota de 1 a 5; reduzir a perda em X% é uma aproximação para mover o risco na matriz.</li>
         <li>Os dados ficam no navegador de quem usa (localStorage); não há servidor nem login.</li>
       </ul>
     </div>
     <div class="prose">
       <h3>Fórmulas</h3>
       <dl class="formulas">
-        <dt>Nível do risco</dt><dd>P×I, com P e I de 1 a 5. Baixo 1–4 · Moderado 5–9 · Alto 10–14 · Crítico 15–25. I = pior nota entre pessoas, reputação, processos e financeiro.</dd>
-        <dt>Perda esperada anual</dt><dd>λ × perda média, com λ = −ln(1 − p) e perda média = (mín + provável + máx) ÷ 3.</dd>
-        <dt>Risco residual</dt><dd>p<sub>res</sub> = p × Π(1 − redução de probabilidade); perda<sub>res</sub> = perda × Π(1 − redução de consequência). Ações em andamento pesam pelo % de progresso no cenário atual.</dd>
+        <dt>Gravidade e nível</dt><dd>Chance (P) × impacto (I), de 1 a 5 cada. Baixo 1–4 · Moderado 5–9 · Alto 10–14 · Crítico 15–25. O impacto é a pior nota entre pessoas, reputação, processos e financeiro.</dd>
+        <dt>Perda esperada por ano</dt><dd>λ × perda média, com λ = −ln(1 − p) e perda média = (mín + provável + máx) ÷ 3.</dd>
+        <dt>Cenários “Hoje” e “Com o plano”</dt><dd>p<sub>res</sub> = p × Π(1 − redução da chance); perda<sub>res</sub> = perda × Π(1 − redução da perda). No cenário “Hoje”, ações em andamento contam pela porcentagem de progresso.</dd>
         <dt>Transferência</dt><dd>Perda retida = mín(perda, franquia) + (perda − franquia) × (1 − cobertura).</dd>
-        <dt>Impacto do elo</dt><dd>máx(0, TTR − TTS) × receita semanal dependente × margem de contribuição.</dd>
-        <dt>Monte Carlo</dt><dd>Eventos ~ Poisson(λ) e perda por evento ~ Triangular. VaR 95% = percentil 95; CVaR 95% = média dos 5% piores anos.</dd>
+        <dt>Margem em risco de um elo</dt><dd>máx(0, TTR − TTS) × receita semanal dependente × margem de contribuição.</dd>
+        <dt>Simulação Monte Carlo</dt><dd>Eventos ~ Poisson(λ) e perda por evento ~ Triangular. VaR 95% = percentil 95; CVaR 95% = média dos 5% piores anos.</dd>
         <dt>Fornecedores</dt><dd>Nota = média ponderada de seis critérios de 0 a 100. HHI = Σ (participação %)².</dd>
       </dl>
       <h3>Referências</h3>
@@ -442,20 +99,267 @@ X.metodologiaHtml = () => `
     </div>
   </div>`;
 
+X.glossarioHtml = () => `<p class="muted">Os termos que aparecem no sistema, em linguagem simples.</p>
+  <dl class="gloss">${App.GLOSS.map(([t, d]) => `<div><dt>${U.esc(t)}</dt><dd>${U.esc(d)}</dd></div>`).join('')}</dl>`;
+
+/* ==========================================================================
+   Guia passo a passo (12 páginas): mapa do sistema e roteiro completo de uso
+   ========================================================================== */
+X.guidePage = U.clamp(+(U.storage.get('riscogcs-guia') || 0), 0, 11);
+X.steps = (list) => `<ol class="man-steps">${list.map(([t, d]) => `<li><b>${t}</b><span>${d}</span></li>`).join('')}</ol>`;
+X.tip = (t) => `<p class="man-tip">${I('info')}<span><b>Dica:</b> ${t}</span></p>`;
+X.live = (cap, html) => `<figure class="man-live"><figcaption>${I('eye')} ${cap}</figcaption>${html}</figure>`;
+
+/* Página 1: o ciclo de gestão de riscos e o mapa de todas as áreas */
+X.sysMap = () => {
+  const cycle = [
+    ['plus', 'Identificar', 'Cadastro de riscos e sinais da rede', 6],
+    ['alert', 'Avaliar', 'Matriz, registro e detalhes do risco', 4],
+    ['checks', 'Tratar', 'Plano de ações', 7],
+    ['activity', 'Monitorar', 'Indicadores, sinais e fornecedores', 8],
+    ['flask', 'Testar', 'Simulações de perda e de parada', 10],
+  ];
+  const areas = [
+    ['dashboard', 'Visão geral', 'O que exige atenção hoje', ['Indicadores-resumo', 'Apetite a risco', 'Matriz de riscos', 'Indicadores fora da tolerância', 'Exposição por categoria e por etapa', 'Mapa da cadeia e elo selecionado', 'Riscos prioritários', 'Eventos recentes e andamento do plano'], 2],
+    ['alert', 'Riscos', 'Todos os riscos e onde estão', ['Cenário de avaliação', 'Matriz e quadrantes', 'Perda por categoria', 'Registro com filtros e ordenação', 'Critérios de pontuação', 'Detalhes de cada risco'], 4],
+    ['checks', 'Plano de ações', 'O que está sendo feito', ['Indicadores do plano', 'Cascata de redução da perda', 'Estratégias de tratamento', 'Ações do plano', 'Retorno por real investido'], 7],
+    ['activity', 'Monitoramento', 'Sinais de que um risco se aproxima', ['Filtros por situação', 'Indicadores-chave de risco', 'Sinais e eventos da rede', 'Avaliação dos fornecedores', 'Pesos e concentração de compras'], 8],
+    ['flask', 'Simulações', 'Teste cenários antes que aconteçam', ['Perda no ano (Monte Carlo)', 'Parada de um elo', 'Resposta ágil × tardia'], 10],
+    ['sliders', 'Ajuda e barra superior', 'Apoio em qualquer tela', ['Tour guiado', 'Como funciona: guia, método e glossário', 'Busca e notificações', 'Aparência'], 11],
+  ];
+  return `<div class="man-sub">O ciclo de gestão de riscos — e onde cada etapa acontece</div>
+  <ol class="cycle">${cycle.map(([ic, t, d, pg], i) => `<li><button type="button" data-gp="${pg}" data-tip="Ver a página ${pg + 1} do guia"><span class="cy-dot">${I(ic)}</span><span class="cy-n">Etapa ${i + 1}</span><b>${t}</b><small>${d}</small></button></li>`).join('')}</ol>
+  <div class="man-sub">O que existe em cada área do sistema</div>
+  <div class="sysmap">${areas.map(([ic, t, d, items, pg]) => `<div class="sys-card" role="button" tabindex="0" data-gp="${pg}">
+    <span class="sys-head"><span class="sys-ic">${I(ic)}</span><span><b>${t}</b><small>${d}</small></span></span>
+    <ul>${items.map((x) => `<li>${x}</li>`).join('')}</ul><span class="sys-go">Ir para a página ${pg + 1} ${I('arrowRight')}</span></div>`).join('')}</div>`;
+};
+
+X.GUIDE = [
+  {
+    t: 'Mapa do sistema', where: 'Todo o sistema',
+    lead: 'O RiscoGCS acompanha os riscos da cadeia de suprimentos da empresa — do fornecedor de matéria-prima até o cliente. Tudo gira em torno de um ciclo de seis etapas. Clique numa etapa ou numa área para ir direto à página do guia que a explica.',
+    body: () => X.sysMap() + `<div class="man-cta"><span><b>Prefere aprender na prática?</b> O tour guiado percorre as telas com você, destacando onde clicar.</span><button class="btn btn-primary" type="button" data-tour-start>${I('compass')} Fazer o tour guiado</button></div>` + X.tip('Em qualquer tela, “Como usar esta página” resume os primeiros passos, e o ícone de informação ao lado do título de cada cartão explica como ler o gráfico.'),
+    go: { label: 'Começar pela Visão geral', run: () => App.go('painel') },
+  },
+  {
+    t: 'Navegar pela interface', where: 'Menu lateral, barra superior e cabeçalho',
+    lead: 'Conheça as partes fixas da tela. Elas funcionam do mesmo jeito em todas as páginas.',
+    body: () => X.steps([
+      ['Escolha uma área no menu lateral.', 'Visão geral, Riscos, Plano de ações, Monitoramento e Simulações. Os números em vermelho mostram pendências: ações atrasadas e sinais novos.'],
+      ['Busque qualquer coisa.', 'Clique na busca ou tecle Ctrl + K. Digite um código (R01, A05, K02), um elo, uma categoria ou um fornecedor e tecle Enter para abrir.'],
+      ['Use a central de ajuda.', 'O botão “?” da barra superior reúne o tour guiado, este guia, o método e o glossário. O sino reúne sinais novos, ações atrasadas e indicadores críticos.'],
+      ['Leia o cabeçalho da página.', 'A trilha mostra onde você está e a etiqueta ao lado do título resume a situação. À direita ficam “Como usar esta página” e a ação principal da página, como “Novo risco”.'],
+      ['Leia cada cartão.', 'O título diz o que o cartão mostra e a linha abaixo explica como usá-lo. O ícone de informação ao lado do título abre a explicação completa.'],
+      ['Ajuste a aparência.', 'O botão de lua alterna entre claro e escuro; o de paleta muda a cor de destaque, a densidade e o menu recolhido.'],
+    ]) + X.tip('Em telas menores, recolha o menu lateral com o botão ao lado do logotipo para ganhar espaço.'),
+    go: { label: 'Testar a busca', run: () => setTimeout(() => U.$('#searchInput').focus(), 80) },
+  },
+  {
+    t: 'Visão geral: o resumo do dia', where: 'Menu › Visão geral · topo da página',
+    lead: 'A primeira tela responde, em ordem, às perguntas mais importantes. Comece sempre por aqui.',
+    body: () => {
+      const pfA = M.portfolio('atual'), emp = S.state.empresa, ap = emp.apetite ? pfA.pea / emp.apetite : 0, band = App.APPETITE_BAND(ap);
+      return `<div class="man-split">${X.steps([
+        ['Leia os indicadores do topo.', 'Perda esperada por ano, uso do limite de perda, riscos ativos, elos sem cobertura, indicadores em alerta e ações atrasadas. Clique num indicador para abrir a lista correspondente.'],
+        ['Confira o apetite a risco.', 'O medidor mostra quanto do limite anual de perda já está comprometido; a marca escura é o limite. Embaixo, a mesma perda sem ações, hoje e com o plano completo.'],
+        ['Veja onde os riscos se concentram.', 'Na matriz, cada célula conta os riscos de uma combinação de chance e impacto. Clique numa célula para abrir o registro só com esses riscos.'],
+        ['Observe a tendência dos indicadores.', 'Cada coluna é um mês: vermelho = indicadores críticos, amarelo = em atenção. Colunas crescendo indicam piora.'],
+      ])}${X.live(`Medidor com os dados de hoje: ${U.money(pfA.pea)} por ano`, `<div class="ap-read"><span class="ap-val">${U.pct(ap)}</span><span class="ap-txt">do limite de <b>${U.money(emp.apetite)}</b></span></div>${C.meter({ value: ap, max: 1.5, color: V.lvColor(band), zones: [{ to: 0.6, color: 'var(--z-ok)' }, { to: 0.9, color: 'var(--z-warn)' }, { to: 1, color: 'var(--z-serious)' }, { to: 1.5, color: 'var(--z-crit)' }], label: 'Exemplo do medidor de apetite a risco', limitTip: 'Limite aceitável' })}`)}</div>`
+        + X.tip('Os números são recalculados sempre que você muda um risco, uma ação ou a leitura de um indicador.');
+    },
+    go: { label: 'Abrir a Visão geral', run: () => App.go('painel') },
+  },
+  {
+    t: 'Visão geral: exposição, mapa e elo', where: 'Menu › Visão geral · parte de baixo',
+    lead: 'Desça a página para ver onde está o custo, por qual etapa da cadeia ele passa e o que acontece se um elo parar.',
+    body: () => {
+      const n = S.state.nodes.filter((x) => x.ttr != null).sort((a, b) => M.nodePI(b) - M.nodePI(a))[0];
+      return X.steps([
+        ['Compare as categorias.', '“Exposição por categoria” soma a perda esperada de cada tipo de risco, dividida por nível. Clique numa linha para filtrar o registro.'],
+        ['Percorra as etapas da cadeia.', 'A tabela vai do fornecedor de nível 2 ao cliente e mostra o pior nível, os elos descobertos e a perda de cada etapa. Clique numa etapa para ver o elo mais crítico no mapa.'],
+        ['Explore o mapa.', 'Clique num elo para selecioná-lo. Use + e −, Ctrl + rolagem e arraste para navegar; troque a cor entre “Nível de risco” e “Cobertura”.'],
+        ['Analise o elo selecionado.', 'Os quatro números resumem o elo e as barras comparam quanto a empresa aguenta sem ele com quanto ele leva para voltar. O trecho vermelho são semanas sem abastecimento.'],
+        ['Priorize.', '“Riscos prioritários” lista os mais graves hoje; troque para “Elos” para comparar recuperação e sobrevivência de toda a cadeia.'],
+        ['Acompanhe eventos e plano.', 'No fim da página ficam os sinais recentes da rede e o andamento do plano, com os próximos prazos.'],
+      ]) + (n ? X.live(`Recuperação × sobrevivência do elo mais fraco hoje: ${U.esc(n.nome)}`, C.ruler(n.ttr, n.tts)) : '')
+        + X.tip('Em “Ajustar os tempos deste elo”, mude as semanas para testar uma hipótese — o painel recalcula na hora.');
+    },
+    go: { label: 'Ver o mapa da cadeia', run: () => { App.go('painel'); setTimeout(() => { const c = U.$('#netCard'); if (c) c.scrollIntoView({ behavior: U.calm() ? 'auto' : 'smooth', block: 'start' }); }, 120); } },
+  },
+  {
+    t: 'Riscos: encontrar e filtrar', where: 'Menu › Riscos',
+    lead: 'Aqui estão todos os riscos registrados. Use a matriz e os filtros para chegar rápido ao que interessa.',
+    body: () => `<div class="man-split">${X.steps([
+      ['Escolha o cenário de avaliação.', '“Sem ações”, “Hoje” ou “Com o plano”. Os riscos mudam de célula conforme as ações reduzem a chance e o impacto.'],
+      ['Leia a matriz.', 'Para cima = mais provável; para a direita = mais impacto. Clique numa célula para listar só os riscos dela. “Quadrantes” mostra a resposta recomendada.'],
+      ['Filtre por nível ou categoria.', 'Clique em Baixo, Moderado, Alto ou Crítico, ou numa linha de “Perda por categoria”. Os filtros ativos aparecem acima da tabela: clique no ✕ para remover.'],
+      ['Refine o registro.', 'Busque por código, nome, causa ou elo, filtre por natureza e situação e ordene clicando no título de cada coluna.'],
+      ['Abra os detalhes.', 'Clique numa linha para abrir o painel lateral do risco.'],
+    ])}${X.live('Matriz com os riscos de hoje', V.heatmap('atual', { compact: true }))}</div>`
+      + X.tip('“Exportar” gera uma planilha CSV que abre no Excel. “Critérios de pontuação”, no fim da página, mostra as escalas usadas para dar as notas.'),
+    go: { label: 'Abrir Riscos', run: () => App.go('riscos') },
+  },
+  {
+    t: 'Os detalhes do risco', where: 'Clique em qualquer código de risco (ex.: R01)',
+    lead: 'O painel lateral reúne tudo sobre um risco: onde está, quão grave é, por que pode acontecer e o que está sendo feito.',
+    body: () => X.steps([
+      ['Leia o cabeçalho.', 'Código, título e as etiquetas de nível, situação, natureza e quadrante. Logo abaixo: elo, categoria, responsável, data, perda esperada e número de ações.'],
+      ['Veja a avaliação.', 'A gravidade de hoje vai de 1 a 25 (chance × impacto) e a escala mostra em que faixa ela cai. A tabela compara os três cenários.'],
+      ['Entenda causa e consequência.', '“Por que pode acontecer” e “O que acontece se ocorrer”, mais a perda mínima, mais provável e máxima de cada ocorrência.'],
+      ['Confira o impacto por dimensão.', 'Pessoas, reputação, processos e financeiro. Vale a pior nota.'],
+      ['Siga as recomendações.', 'Os quadros explicam como estimar e tratar esse tipo de risco e o que o nível dele exige.'],
+      ['Aja sobre o risco.', 'No rodapé: “Editar risco”, “Criar ação” ou “Excluir” (pede confirmação antes).'],
+    ]) + X.tip('Códigos de risco aparecem como links em várias telas — clique em qualquer um para abrir os detalhes.'),
+    go: { label: 'Abrir um risco de exemplo', keep: true, run: () => { const t = M.portfolio('atual').list.slice().sort((a, b) => b.e.score - a.e.score || b.e.pea - a.e.pea)[0]; if (t) V.openRisk(t.r.id); } },
+  },
+  {
+    t: 'Cadastrar um risco', where: 'Botão “Novo risco” no cabeçalho da Visão geral e de Riscos',
+    lead: 'Um único formulário reúne tudo o que o risco precisa para entrar na matriz e no registro.',
+    body: () => X.steps([
+      ['Descreva o risco.', 'Dê um título que diga qual evento pode acontecer e escolha a categoria e a natureza: aleatório, acidental ou intencional.'],
+      ['Diga onde ele está.', 'Escolha o elo da cadeia afetado, o responsável e a situação. Se houver, ligue o indicador que avisa antes.'],
+      ['Estime a chance.', 'De 1 (raro) a 5 (quase certo), pela frequência esperada por ano.'],
+      ['Avalie o impacto.', 'Dê notas de 1 a 5 para pessoas, reputação e processos. Vale a pior dimensão, incluindo a financeira.'],
+      ['Informe as perdas.', 'Perda mínima, mais provável e máxima por ocorrência, em R$ mil. Elas definem o impacto financeiro e a perda esperada por ano.'],
+      ['Explique e salve.', 'Descreva a causa e a consequência e clique em “Criar risco”. Ele entra na matriz e no registro na hora; depois, crie ações nos detalhes do risco.'],
+    ]) + X.tip('Sinais da rede viram risco com “Transformar em risco”, que abre este formulário já preenchido. No mapa da cadeia, “Registrar risco neste elo” já traz o elo escolhido.'),
+    go: { label: 'Abrir o cadastro', keep: true, run: () => V.riskForm(null) },
+  },
+  {
+    t: 'Plano de ações', where: 'Menu › Plano de ações',
+    lead: 'Mostra o que está sendo feito para reduzir os riscos, quanto custa e quanto da perda já foi evitada.',
+    body: () => X.steps([
+      ['Leia os indicadores do topo.', 'Perda sem ações, hoje e com o plano, mais o custo anual do plano e quanto ele evita.'],
+      ['Siga a cascata.', 'Da perda sem ações até a meta: o degrau verde é o que já foi reduzido; o listrado, o que depende de concluir o plano.'],
+      ['Atenda aos alertas.', 'O aviso amarelo lista riscos altos ou críticos ainda sem ação. Clique no código para abrir o risco e criar uma ação.'],
+      ['Filtre por estratégia.', 'Reduzir a chance, reduzir o impacto ou transferir o custo. Clique de novo para limpar o filtro.'],
+      ['Use a tabela de ações.', 'Filtre por situação — inclusive “Atrasadas” — e ordene por retorno, perda evitada, custo ou prazo. Clique numa ação para atualizar progresso, prazo ou responsável.'],
+      ['Compare o retorno.', 'No fim da página, barras verdes evitam mais perda do que custam (retorno acima de 1×).'],
+    ]) + X.tip('Para criar uma ação já ligada a um risco, abra os detalhes dele e use “Criar ação”. Ou use “Nova ação” no cabeçalho.'),
+    go: { label: 'Abrir o Plano de ações', run: () => App.go('acoes') },
+  },
+  {
+    t: 'Monitoramento: indicadores e sinais', where: 'Menu › Monitoramento › aba Indicadores e sinais',
+    lead: 'Acompanhe o que costuma piorar antes de um problema acontecer e registre o que foi detectado na rede.',
+    body: () => {
+      const k = S.state.kris.find((x) => M.kriStatus(x) === 'crit') || S.state.kris[0];
+      const st = M.kriStatus(k);
+      return `<div class="man-split">${X.steps([
+        ['Filtre pela situação.', 'Os quatro indicadores do topo filtram os cartões: críticos, em atenção, normais ou todos. Clique de novo para tirar o filtro.'],
+        ['Leia um indicador.', 'A faixa colorida mostra os limites (verde, amarelo, vermelho) e o traço escuro, a leitura atual. A etiqueta de variação compara com o mês anterior.'],
+        ['Registre a leitura do mês.', 'Clique no cartão, informe o valor no painel lateral, confira os limites e clique em “Salvar leitura”.'],
+        ['Analise os sinais.', 'Para cada sinal: “Marcar como visto”, “Transformar em risco” (abre o cadastro já preenchido) ou “Descartar”.'],
+        ['Registre um sinal novo.', '“Registrar sinal”, no cabeçalho ou no fim da lista, anota uma notícia, um aviso de parceiro ou uma leitura fora do normal.'],
+      ])}${X.live('Indicador real, com a faixa de limites', `<div class="man-kri"><span class="kri-top"><b>${U.esc(k.nome)}</b>${V.statusPill(st)}</span><span class="kri-big">${U.num(k.hist[11], k.dec)}<small>${U.esc(k.unidade)}</small></span>${C.zone(k)}<small class="muted">${k.dir === 'maior' ? 'Melhor quando sobe' : 'Melhor quando cai'} · normal ${k.dir === 'maior' ? 'a partir de' : 'até'} ${U.num(k.verde, k.dec)} · crítico ${k.dir === 'maior' ? 'abaixo de' : 'acima de'} ${U.num(k.vermelho, k.dec)}</small></div>`)}</div>`
+        + X.tip('O sino da barra superior avisa quando chegam sinais novos — e permite marcar todos como vistos de uma vez.');
+    },
+    go: { label: 'Abrir os indicadores', run: () => App.go('monitor', () => { App.monTab = 'kri'; }) },
+  },
+  {
+    t: 'Monitoramento: fornecedores', where: 'Menu › Monitoramento › aba Fornecedores',
+    lead: 'Compare a nota de risco dos fornecedores e veja onde as compras dependem demais de uma única fonte.',
+    body: () => X.steps([
+      ['Leia o resumo.', 'Quantos fornecedores são avaliados, quantos estão nas classes C ou D, quantos são fonte única e quantas compras estão concentradas.'],
+      ['Leia a nota.', 'De 0 (risco mínimo) a 100 (máximo), com classes A, B, C e D. A barra colorida mostra quanto cada critério pesou.'],
+      ['Abra os detalhes do fornecedor.', 'Clique na linha para ver, no painel lateral, a escala da nota, a composição, os dados de compra e as fontes alternativas.'],
+      ['Ajuste os pesos.', 'Arraste os controles para dar mais ou menos importância a cada critério. Notas e classes mudam na hora.'],
+      ['Verifique a concentração.', 'Quanto mais perto de 10.000 pontos, mais a compra depende de um só fornecedor — e maior o risco de parar junto com ele.'],
+    ]) + X.tip('“Restaurar pesos” volta aos valores originais a qualquer momento.'),
+    go: { label: 'Abrir Fornecedores', run: () => App.go('monitor', () => { App.monTab = 'forn'; }) },
+  },
+  {
+    t: 'Simulações', where: 'Menu › Simulações',
+    lead: 'Teste cenários antes que eles aconteçam: quanto pode custar um ano ruim e o que acontece se um elo parar.',
+    body: () => '<div class="man-sub">Aba Perda no ano</div>' + X.steps([
+      ['Rode a simulação.', 'Escolha quantos anos sortear, a semente (repete o mesmo sorteio) e o limite aceitável; clique em “Rodar simulação”.'],
+      ['Compare os cenários.', 'Os cartões mostram a perda média, o ano ruim (1 em 20) e a chance de passar do limite. Clique num cartão para detalhar.'],
+      ['Leia a curva e o histograma.', 'A curva mostra a chance de passar de cada valor; o histograma, quantos anos caem em cada faixa de perda.'],
+    ]) + '<div class="man-sub">Aba Parada de um elo</div>' + X.steps([
+      ['Escolha um caso.', 'Comece por um caso pronto (ex.: incêndio no fornecedor de placas) ou escolha o elo e ajuste a duração e o estoque.'],
+      ['Compare as respostas.', 'Defina quanto a empresa demora para perceber e para ativar o fornecedor alternativo nas respostas ágil e tardia.'],
+      ['Veja o resultado.', 'O gráfico mostra a produção dia a dia; a tabela, o custo de cada resposta. “Reagir cedo vale” é a diferença entre elas.'],
+    ]) + X.tip('Na Visão geral, “Simular parada deste elo” abre esta tela já com o elo selecionado.'),
+    go: { label: 'Abrir Simulações', run: () => App.go('simular') },
+  },
+  {
+    t: 'Ajuda, busca e preferências', where: 'Barra superior e menu lateral',
+    lead: 'Recursos que funcionam em qualquer tela para encontrar informações, tirar dúvidas e deixar a tela do seu jeito.',
+    body: () => X.steps([
+      ['Busque qualquer item.', 'Ctrl + K abre a busca: digite um código, um elo, uma categoria ou um fornecedor e tecle Enter.'],
+      ['Acompanhe as notificações.', 'O sino reúne sinais novos, ações atrasadas e indicadores críticos; dá para marcar todos os sinais como vistos de uma vez.'],
+      ['Exporte as tabelas.', 'O botão “Exportar” do registro de riscos e da lista de ações gera planilhas CSV, que abrem no Excel.'],
+      ['Tire dúvidas.', '“Como usar esta página” resume os primeiros passos de cada tela, o ícone de informação de cada cartão explica o gráfico e o tour guiado percorre o sistema com você.'],
+      ['Personalize a aparência.', 'Tema claro, escuro ou do sistema, cor de destaque, densidade compacta e menu recolhido. Tudo fica salvo neste navegador.'],
+      ['Consulte o método.', 'Nesta janela, as abas Método, Glossário e Dez princípios explicam as fórmulas, os termos e a autoavaliação de maturidade.'],
+    ]) + X.tip('Você chegou ao fim do guia. Para praticar, faça o tour guiado (botão “?” da barra superior › Tour guiado). Volte a este guia quando quiser pelo mesmo botão.'),
+    go: { label: 'Fazer o tour guiado', run: () => Tour.start({ fresh: true }) },
+  },
+];
+
+X.manualHtml = () => {
+  const i = X.guidePage, p = X.GUIDE[i], n = X.GUIDE.length, num = (k) => String(k + 1).padStart(2, '0');
+  return `<div class="manual">
+    <nav class="man-toc" aria-label="Páginas do guia">
+      <div class="man-prog"><span>Página ${i + 1} de ${n}</span><i style="--p:${((i + 1) / n) * 100}%"></i></div>
+      <ol>${X.GUIDE.map((g, k) => `<li><button type="button" data-gp="${k}" class="${k === i ? 'on' : ''} ${k < i ? 'seen' : ''}" ${k === i ? 'aria-current="page"' : ''}><span class="man-n">${k < i ? I('check') : num(k)}</span><span>${g.t}</span></button></li>`).join('')}</ol>
+    </nav>
+    <article class="man-page" aria-live="polite">
+      <div class="man-top"><span class="eyebrow">Página ${num(i)} de ${n}</span><span class="man-where">${I('focus')} ${U.esc(p.where)}</span></div>
+      <h3 class="man-title" tabindex="-1">${p.t}</h3>
+      <p class="man-lead">${p.lead}</p>
+      ${p.body()}
+      <div class="man-nav">
+        <button class="btn" type="button" data-gp="${i - 1}" ${i === 0 ? 'disabled' : ''}>${I('chevLeft')} Anterior</button>
+        <span class="man-dots" aria-hidden="true">${X.GUIDE.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</span>
+        ${p.go ? `<button class="btn" type="button" data-ggo>${I('arrowUpRight')} ${p.go.label}</button>` : ''}
+        ${i < n - 1 ? `<button class="btn btn-primary" type="button" data-gp="${i + 1}">Próxima ${I('chevRight')}</button>` : `<button class="btn btn-primary" type="button" data-gp="0">${I('refresh')} Voltar ao início</button>`}
+      </div>
+    </article>
+  </div>`;
+};
+
+X.goPage = (k) => {
+  X.guidePage = U.clamp(k, 0, X.GUIDE.length - 1);
+  U.storage.set('riscogcs-guia', X.guidePage);
+  X.drawAbout();
+  const host = U.$('#aboutHost');
+  if (!host) return;
+  host.closest('.modal-body').scrollTop = 0;
+  const t = U.$('.man-title', host);
+  if (t) t.focus({ preventScroll: true });
+};
+
+/* Abre o guia direto numa página (usado pelo "Como usar esta página") */
+X.openGuideAt = (k) => { X.guidePage = U.clamp(k, 0, X.GUIDE.length - 1); X.about('guia'); };
+
 X.about = (tab) => {
   if (tab) X.aboutTab = tab;
-  U.modal({ title: 'Sobre o módulo', xl: true, body: '<div id="aboutHost"></div>' });
+  X._aboutClose = U.modal({ title: 'Como funciona', xl: true, body: '<div id="aboutHost"></div>' });
+  const back = U.$('#modalRoot').lastElementChild;
+  back.addEventListener('keydown', (e) => {
+    if (X.aboutTab !== 'guia' || U.$('#modalRoot').lastElementChild !== back) return;
+    if (e.target.closest && e.target.closest('input, textarea, select')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); X.goPage(X.guidePage + 1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); X.goPage(X.guidePage - 1); }
+  });
   X.drawAbout();
+  setTimeout(() => { const t = U.$('#aboutHost .man-title'); if (t) t.focus({ preventScroll: true }); }, 60);
 };
 
 X.drawAbout = () => {
   const host = U.$('#aboutHost');
   if (!host) return;
   const scroll = host.closest('.modal-body').scrollTop;
-  host.innerHTML = `<div class="subtabs">${V.seg('ab', [['met', 'Como funciona'], ['pr', 'Dez princípios (autoavaliação)']], X.aboutTab, 'Sobre')}</div>
-    ${X.aboutTab === 'pr' ? X.principiosHtml() : X.metodologiaHtml()}`;
+  const tab = X.aboutTab;
+  host.innerHTML = `<div class="subtabs">${V.tabs('ab', [['guia', 'Guia passo a passo', 'book'], ['met', 'Método', 'info'], ['glo', 'Glossário', 'file'], ['pr', 'Dez princípios', 'target']], tab, 'Como funciona')}</div>
+    ${tab === 'guia' ? X.manualHtml() : tab === 'pr' ? X.principiosHtml() : tab === 'glo' ? X.glossarioHtml() : X.metodologiaHtml()}`;
   host.closest('.modal-body').scrollTop = scroll;
   U.$$('[data-ab]', host).forEach((b) => b.addEventListener('click', () => { X.aboutTab = b.dataset.ab; X.drawAbout(); host.closest('.modal-body').scrollTop = 0; }));
+  U.$$('[data-gp]', host).forEach((b) => b.addEventListener('click', () => X.goPage(+b.dataset.gp)));
+  U.$$('[data-tour-start]', host).forEach((b) => b.addEventListener('click', () => { if (X._aboutClose) X._aboutClose(); Tour.start({ fresh: true }); }));
+  const go = U.$('[data-ggo]', host);
+  if (go) go.addEventListener('click', () => { const p = X.GUIDE[X.guidePage]; if (!p.go.keep && X._aboutClose) X._aboutClose(); p.go.run(); });
   U.$$('[data-pr]', host).forEach((b) => b.addEventListener('click', () => { S.state.principios[+b.dataset.pr].nota = +b.dataset.v; S.save(); X.drawAbout(); }));
   U.$$('[data-ev]', host).forEach((t) => t.addEventListener('change', () => { S.state.principios[+t.dataset.ev].evidencia = t.value; S.save(); U.toast('Evidência salva'); }));
 };
