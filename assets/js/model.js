@@ -66,7 +66,13 @@ M.expRetained = (sev, ins) => {
 };
 
 /* Peso de uma ação conforme o cenário avaliado */
-M.MODES = { inerente: 'Inerente', atual: 'Residual atual', planejado: 'Residual planejado' };
+M.MODES = { inerente: 'Sem ações', atual: 'Hoje', planejado: 'Com o plano' };
+/* Explicação de cada cenário (nome técnico entre parênteses) */
+M.MODES_INFO = {
+  inerente: 'Como os riscos seriam sem nenhuma ação de tratamento (risco inerente).',
+  atual: 'Como os riscos estão hoje: conta as ações concluídas e, em proporção ao avanço, as em andamento (risco residual atual).',
+  planejado: 'Como os riscos ficarão se todas as ações do plano forem concluídas (risco residual planejado).',
+};
 M.weight = (a, mode) => {
   if (mode === 'inerente') return 0;
   if (mode === 'planejado') return 1;
@@ -133,6 +139,7 @@ M.kriStatus = (k, v = k.hist[k.hist.length - 1]) => {
   return v <= k.verde ? 'ok' : v > k.vermelho ? 'crit' : 'warn';
 };
 M.STATUS_TXT = { ok: 'Normal', warn: 'Atenção', crit: 'Crítico' };
+M.STATUS_LONG = { ok: 'dentro da faixa normal', warn: 'entre o limite normal e o crítico', crit: 'passou do limite crítico' };
 
 /* ---------------- Fornecedores ---------------- */
 M.supplierParts = (s) => ({
