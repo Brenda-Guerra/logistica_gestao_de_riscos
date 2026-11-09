@@ -68,9 +68,9 @@ DATA.ALAVANCAS = {
   transf: ['Seguro', 'Hedge / contrato'],
 };
 DATA.ESTRATEGIAS = {
-  prob: 'Reduzir probabilidade',
-  cons: 'Reduzir consequência',
-  transf: 'Transferir risco',
+  prob: 'Reduzir a chance',
+  cons: 'Reduzir o impacto',
+  transf: 'Transferir o custo',
 };
 DATA.STATUS_RISCO = ['Identificado', 'Em análise', 'Em tratamento', 'Monitorado', 'Aceito', 'Encerrado'];
 DATA.STATUS_ACAO = ['Planejada', 'Em andamento', 'Concluída'];

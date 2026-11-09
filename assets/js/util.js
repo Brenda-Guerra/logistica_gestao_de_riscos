@@ -52,17 +52,19 @@ U.storage = {
   del(k) { try { localStorage.removeItem(k); } catch (e) { /* sem armazenamento */ } },
 };
 
-/* ---------- Modal ---------- */
-U.modal = ({ title, body, wide = false, xl = false, actions = [], onMount }) => {
+/* ---------- Modal e painel lateral ----------
+   drawer: abre como painel à direita (detalhes e formulários); kicker: linha acima do título;
+   sub: etiquetas e metadados abaixo do título (HTML) */
+U.modal = ({ title, body, wide = false, xl = false, drawer = false, kicker = '', sub = '', actions = [], onMount }) => {
   const root = U.$('#modalRoot');
   const wrap = document.createElement('div');
-  wrap.className = 'modal-back';
+  wrap.className = 'modal-back' + (drawer ? ' drawer-back' : '');
   wrap.innerHTML = `
-    <div class="modal ${wide ? 'modal-wide' : ''} ${xl ? 'modal-xl' : ''}" role="dialog" aria-modal="true" aria-label="${U.esc(title)}">
-      <header class="modal-head"><h2>${U.esc(title)}</h2>
-        <button class="icon-btn" data-close aria-label="Fechar">✕</button></header>
+    <div class="modal ${drawer ? 'drawer' : ''} ${wide ? 'modal-wide' : ''} ${xl ? 'modal-xl' : ''}" role="dialog" aria-modal="true" aria-label="${U.esc(title)}">
+      <header class="modal-head"><div class="mh-t">${kicker ? `<span class="mh-kicker">${U.esc(kicker)}</span>` : ''}<h2>${U.esc(title)}</h2>${sub ? `<div class="mh-sub">${sub}</div>` : ''}</div>
+        <button class="icon-btn" type="button" data-close aria-label="Fechar" data-tip="Fechar (Esc)">${I('x')}</button></header>
       <div class="modal-body">${body}</div>
-      ${actions.length ? `<footer class="modal-foot">${actions.map((a, i) => `<button class="btn ${a.cls || ''}" data-act="${i}">${U.esc(a.label)}</button>`).join('')}</footer>` : ''}
+      ${actions.length ? `<footer class="modal-foot">${actions.map((a, i) => `<button class="btn ${a.cls || ''}" type="button" data-act="${i}">${a.icon ? I(a.icon) : ''}${U.esc(a.label)}</button>`).join('')}</footer>` : ''}
     </div>`;
   root.appendChild(wrap);
   const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); };
@@ -85,18 +87,41 @@ U.modal = ({ title, body, wide = false, xl = false, actions = [], onMount }) => 
 
 U.confirm = (msg, onYes, label = 'Confirmar') =>
   U.modal({
-    title: 'Confirmação',
+    title: 'Confirme antes de continuar',
     body: `<p class="lead">${U.esc(msg)}</p>`,
     actions: [{ label: 'Cancelar' }, { label, cls: 'btn-danger', onClick: () => onYes() }],
   });
 
-U.toast = (msg) => {
+/* Notificação no canto inferior direito: ícone + mensagem + fechar.
+   icon: 'check' (sucesso), 'download', 'info' ou 'alert' (erro) */
+U.TOAST_TITLE = { check: 'Pronto', download: 'Arquivo gerado', info: 'Informação', alert: 'Atenção' };
+U.toast = (msg, icon = 'check') => {
   const t = U.$('#toast');
-  t.textContent = msg;
+  t.innerHTML = `<span class="t-ic">${I(icon === 'alert' ? 'alertCircle' : icon === 'info' ? 'info' : icon === 'download' ? 'download' : 'checkCircle')}</span>
+    <span class="t-msg"><b>${U.TOAST_TITLE[icon] || 'Pronto'}</b>${U.esc(msg)}</span><button class="t-x" type="button" aria-label="Fechar notificação">${I('x')}</button>`;
+  t.dataset.kind = icon;
   t.classList.add('show');
+  U.$('.t-x', t).addEventListener('click', () => t.classList.remove('show'));
   clearTimeout(U._tt);
-  U._tt = setTimeout(() => t.classList.remove('show'), 2600);
+  U._tt = setTimeout(() => t.classList.remove('show'), icon === 'alert' ? 5000 : 3200);
 };
+
+/* Movimento reduzido: respeita a preferência do sistema */
+U.calm = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* Tempo relativo em português ("hoje", "ontem", "há 6 dias") a partir de data ISO */
+U.ago = (iso) => {
+  if (!iso) return '—';
+  const d = Math.round((new Date(U.today() + 'T00:00:00') - new Date(iso + 'T00:00:00')) / 864e5);
+  if (d <= 0) return d === 0 ? 'hoje' : 'em ' + U.plural(-d, 'dia', 'dias');
+  if (d === 1) return 'ontem';
+  if (d < 30) return 'há ' + d + ' dias';
+  const m = Math.round(d / 30);
+  return 'há ' + U.plural(m, 'mês', 'meses');
+};
+
+/* Remove acentos e normaliza para busca */
+U.fold = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 /* ---------- Arquivos: download (site) ou copiar (pré-visualização) ---------- */
 U.download = (name, text, mime = 'text/plain') => {
@@ -108,13 +133,13 @@ U.download = (name, text, mime = 'text/plain') => {
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-    U.toast('Arquivo ' + name + ' gerado');
+    U.toast('Arquivo baixado: ' + name, 'download');
     return;
   }
   U.modal({
-    title: 'Copiar ' + name,
+    title: 'Copiar o conteúdo de ' + name,
     wide: true,
-    body: `<p class="muted">Nesta pré-visualização o navegador bloqueia downloads. Copie o conteúdo abaixo e salve como <b>${U.esc(name)}</b>. No site publicado no Vercel o arquivo é baixado direto.</p>
+    body: `<p class="muted">Nesta pré-visualização o navegador bloqueia downloads. Copie o conteúdo abaixo e salve num arquivo chamado <b>${U.esc(name)}</b>. No site publicado, o arquivo é baixado direto.</p>
            <textarea id="dlText" class="code-area" readonly>${U.esc(text)}</textarea>`,
     actions: [
       { label: 'Fechar' },
@@ -122,8 +147,8 @@ U.download = (name, text, mime = 'text/plain') => {
         label: 'Copiar', cls: 'btn-primary',
         onClick: (w) => {
           const ta = w.querySelector('#dlText');
-          const fallback = () => { ta.focus(); ta.select(); U.toast('Texto selecionado: use Ctrl+C'); };
-          try { navigator.clipboard.writeText(text).then(() => U.toast('Copiado'), fallback); } catch (e) { fallback(); }
+          const fallback = () => { ta.focus(); ta.select(); U.toast('Texto selecionado: tecle Ctrl+C para copiar', 'info'); };
+          try { navigator.clipboard.writeText(text).then(() => U.toast('Conteúdo copiado'), fallback); } catch (e) { fallback(); }
           return false;
         },
       },
